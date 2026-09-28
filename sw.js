@@ -1,4 +1,4 @@
-const CACHE = "oh-v30";
+const CACHE = "oh-v31";
 const PRECACHE = [
   "./manifest.json",
   "./assets/app.css?v=30",

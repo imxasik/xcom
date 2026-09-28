@@ -104,6 +104,37 @@
 
   /* ---------------- Web Push notifications ---------------- */
   const PUSH_ASK_KEY = "oh_push_asked_v1";
+  // Keep the install prompt alive until the user explicitly uses it. Chromium only
+  // exposes beforeinstallprompt during the current page lifetime.
+  let deferredInstallPrompt = null;
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    showInstallButton();
+  });
+  window.addEventListener("appinstalled", () => {
+    deferredInstallPrompt = null;
+    const b = $("#oh-install");
+    if (b) b.remove();
+  });
+  async function installPwa() {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    try { await deferredInstallPrompt.userChoice; } catch (e) {}
+    deferredInstallPrompt = null;
+    const b = $("#oh-install");
+    if (b) b.remove();
+  }
+  function showInstallButton() {
+    if (!deferredInstallPrompt || $("#oh-install")) return;
+    const b = document.createElement("button");
+    b.id = "oh-install";
+    b.className = "pwa-install";
+    b.type = "button";
+    b.textContent = "অ্যাপ ইনস্টল করুন";
+    b.addEventListener("click", installPwa);
+    document.body.appendChild(b);
+  }
   function urlB64ToUint8Array(base64String) {
     const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
     const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -169,6 +200,9 @@
     return "নোটিফিকেশন চালু করা যায়নি।";
   }
   // Central "turn on notifications" flow reused by the intro sheet and the account toggle.
+  function showPermissionHelp() {
+    overlay(`<div class="push-ask"><div class="push-ico">${icons.bell}</div><h3>নোটিফিকেশন ব্লক করা আছে</h3><p class="hint">ব্রাউজার একবার ব্লক করলে ওয়েবসাইট নিজে থেকে আবার Allow ডায়ালগ খুলতে পারে না। তবে এখান থেকেই সহজে চালু করতে পারবেন।</p><div class="permission-steps"><b>Brave / Android</b><br>১. উপরের অ্যাড্রেস বারের বাম পাশে ⓘ বা সাইট আইকনে চাপুন<br>২. <b>Permissions / Site settings</b> খুলুন<br>৩. <b>Notifications → Allow</b> নির্বাচন করুন<br>৪. এই পেজে ফিরে এসে নিচের বাটনে চাপুন</div><button class="btn block" type="button" data-reload-permission>আমি Allow করেছি — আবার চেষ্টা করুন</button><button class="btn ghost block" style="margin-top:8px" type="button" data-push="no">বন্ধ</button></div>`);
+  }
   async function pushEnable() {
     if (!pushSupported()) { toast(await pushFailMessage("unsupported"), "bad"); return false; }
     if (!window.isSecureContext) { toast(await pushFailMessage("insecure"), "bad"); return false; }
@@ -183,6 +217,7 @@
       } catch (e) { perm = Notification.permission; }
     }
     localStorage.setItem(PUSH_ASK_KEY, "1");
+    if (perm === "denied") { showPermissionHelp(); return false; }
     if (perm !== "granted") { toast(await pushFailMessage("permission"), ""); return false; }
     const res = await pushEnsureSubscribed();
     if (res.ok) { toast("নোটিফিকেশন চালু হয়েছে", "ok"); return true; }
@@ -203,7 +238,7 @@
   function pushMaybeAsk() {
     if (!pushSupported()) return;
     if (Notification.permission === "granted") { pushEnsureSubscribed(); return; }
-    if (Notification.permission === "denied") { localStorage.setItem(PUSH_ASK_KEY, "1"); return; }
+    if (Notification.permission === "denied") { localStorage.setItem(PUSH_ASK_KEY, "1"); showPermissionHelp(); return; }
     if (localStorage.getItem(PUSH_ASK_KEY)) return;
     overlay(pushAskSheet());
   }
@@ -948,6 +983,11 @@
       await api("notifications_read", { id: el.dataset.nid });
       loadNotes();
     }));
+    $$("[data-reload-permission]", root).forEach((b) => b.addEventListener("click", async () => {
+      closeOverlay();
+      await pushEnable();
+      if (state.page === "account") render();
+    }));
     $$("[data-push]", root).forEach((b) => b.addEventListener("click", async () => {
       if (b.dataset.push !== "yes") {
         localStorage.setItem(PUSH_ASK_KEY, "1");
@@ -1247,7 +1287,7 @@
     // Unregistering drops the existing Web Push subscription, which previously
     // wiped notifications on every reload; sw.js already self-updates via
     // skipWaiting()/clients.claim() and the versioned ?v= query.
-    navigator.serviceWorker.register("sw.js?v=30").then((reg) => {
+    navigator.serviceWorker.register("/sw.js?v=31", { scope: "/" }).then((reg) => {
       try { reg.update(); } catch (e) {}
     }).catch(() => {});
   }
