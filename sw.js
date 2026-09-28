@@ -1,9 +1,9 @@
-const CACHE = "oh-v29";
+const CACHE = "oh-v30";
 const PRECACHE = [
   "./manifest.json",
-  "./assets/app.css?v=29",
-  "./assets/app.js?v=29",
-  "./assets/catalog.js?v=29",
+  "./assets/app.css?v=30",
+  "./assets/app.js?v=30",
+  "./assets/catalog.js?v=30",
   "./assets/icons/icon-192.png",
   "./assets/icons/icon-512.png",
 ];
