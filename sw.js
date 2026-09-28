@@ -1,9 +1,9 @@
-const CACHE = "oh-v28";
+const CACHE = "oh-v29";
 const PRECACHE = [
   "./manifest.json",
-  "./assets/app.css?v=28",
-  "./assets/app.js?v=28",
-  "./assets/catalog.js?v=28",
+  "./assets/app.css?v=29",
+  "./assets/app.js?v=29",
+  "./assets/catalog.js?v=29",
   "./assets/icons/icon-192.png",
   "./assets/icons/icon-512.png",
 ];
@@ -50,4 +50,52 @@ self.addEventListener("fetch", (e) => {
   }
 
   e.respondWith(netFirst());
+});
+
+/* ---------------- Web Push notifications ---------------- */
+
+self.addEventListener("push", (event) => {
+  let data = {};
+  if (event.data) {
+    try { data = event.data.json(); } catch (e) {
+      try { data = { title: "OfferHub", body: event.data.text() }; } catch (e2) { data = {}; }
+    }
+  }
+  const title = data.title || "OfferHub";
+  const url = data.url || "./";
+  const options = {
+    body: data.body || "",
+    icon: "./assets/icons/icon-192.png",
+    badge: "./assets/icons/icon-192.png",
+    tag: data.tag || "oh-notify",
+    renotify: true,
+    vibrate: [90, 50, 90],
+    timestamp: Date.now(),
+    data: { url },
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || "./";
+  event.waitUntil(
+    (async () => {
+      const target = new URL(url, self.location.origin);
+      const list = await clients.matchAll({ type: "window", includeUncontrolled: true });
+      for (const c of list) {
+        try {
+          const cu = new URL(c.url);
+          if (cu.origin === target.origin && "focus" in c) {
+            await c.focus();
+            if (cu.pathname !== target.pathname && "navigate" in c) {
+              try { await c.navigate(url); } catch (e) {}
+            }
+            return;
+          }
+        } catch (e) {}
+      }
+      if (clients.openWindow) await clients.openWindow(url);
+    })()
+  );
 });
