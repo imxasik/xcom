@@ -1,0 +1,5 @@
+User-agent: *
+Disallow: /nx.php
+Disallow: /data/
+Disallow: /includes/
+Disallow: /api.php
