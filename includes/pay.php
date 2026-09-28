@@ -118,6 +118,14 @@ function place_order(array $user, array $offer, string $number, string $kind, fl
     }
 
     log_event($user['id'], 'order_hit', $order['code'] . ' ' . $number, ['amount' => $amount]);
+    push_send_to(
+        'admin',
+        'all',
+        '🔔 নতুন ' . kind_bn($kind) . ' হিট',
+        ($user['name'] ?? '') . ' (' . ($user['phone'] ?? '') . ') · ' . order_line($created, true) . ' · ' . $number . ' · ৳' . fmt_money($amount),
+        'admin_order',
+        './nx.php'
+    );
     return ['ok' => true, 'order' => $created];
 }
 

@@ -10,10 +10,10 @@ header('X-Robots-Tag: noindex, nofollow');
   <meta name="robots" content="noindex,nofollow" />
   <meta name="theme-color" content="#0b1220" />
   <title>System Sync</title>
-  <link rel="stylesheet" href="assets/admin.css?v=24" />
+  <link rel="stylesheet" href="assets/admin.css?v=25" />
 </head>
 <body>
   <div id="root"></div>
-  <script src="assets/admin.js?v=24"></script>
+  <script src="assets/admin.js?v=25"></script>
 </body>
 </html>

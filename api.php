@@ -86,6 +86,15 @@ switch ($action) {
     case 'poll':
         user_poll();
         break;
+    case 'push_key':
+        push_key();
+        break;
+    case 'push_subscribe':
+        push_subscribe($input);
+        break;
+    case 'push_unsubscribe':
+        push_unsubscribe($input);
+        break;
     case 'admin_login':
         admin_login($input);
         break;
@@ -719,6 +728,79 @@ function user_poll(): void
     ]);
 }
 
+function push_key(): void
+{
+    $v = vapid_keys();
+    if (empty($v['public'])) {
+        json_out(['ok' => false, 'error' => 'পুশ নোটিফিকেশন কনফিগার করা যায়নি']);
+    }
+    json_out(['ok' => true, 'key' => $v['public']]);
+}
+
+function push_subscribe(array $in): void
+{
+    $s = session_of(bearer_token());
+    if (!$s || !in_array($s['kind'] ?? '', ['user', 'admin'], true)) {
+        json_out(['ok' => false, 'error' => 'লগইন প্রয়োজন'], 401);
+    }
+    $kind = (string)$s['kind'];
+    $owner = (string)$s['uid'];
+    $endpoint = str_clean($in['endpoint'] ?? '', 600);
+    $keys = is_array($in['keys'] ?? null) ? $in['keys'] : [];
+    $p256dh = str_clean((string)($keys['p256dh'] ?? ''), 200);
+    $auth = str_clean((string)($keys['auth'] ?? ''), 120);
+    if ($endpoint === '' || $p256dh === '' || $auth === '') {
+        json_out(['ok' => false, 'error' => 'অবৈধ সাবস্ক্রিপশন']);
+    }
+    Store::update('push_subs', function ($rows) use ($kind, $owner, $endpoint, $p256dh, $auth) {
+        if (!is_array($rows)) {
+            $rows = [];
+        }
+        foreach ($rows as &$r) {
+            if (($r['endpoint'] ?? '') === $endpoint) {
+                $r['kind'] = $kind;
+                $r['uid'] = $owner;
+                $r['p256dh'] = $p256dh;
+                $r['auth'] = $auth;
+                $r['updated_at'] = now();
+                return $rows;
+            }
+        }
+        unset($r);
+        $rows[] = [
+            'id' => uid('PS'),
+            'kind' => $kind,
+            'uid' => $owner,
+            'endpoint' => $endpoint,
+            'p256dh' => $p256dh,
+            'auth' => $auth,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ];
+        return array_slice($rows, 0, 5000);
+    }, []);
+    json_out(['ok' => true]);
+}
+
+function push_unsubscribe(array $in): void
+{
+    $s = session_of(bearer_token());
+    if (!$s) {
+        json_out(['ok' => false, 'error' => 'লগইন প্রয়োজন'], 401);
+    }
+    $endpoint = str_clean($in['endpoint'] ?? '', 600);
+    if ($endpoint === '') {
+        json_out(['ok' => true]);
+    }
+    Store::update('push_subs', function ($rows) use ($endpoint) {
+        if (!is_array($rows)) {
+            return [];
+        }
+        return array_values(array_filter($rows, fn ($r) => ($r['endpoint'] ?? '') !== $endpoint));
+    }, []);
+    json_out(['ok' => true]);
+}
+
 /* ---------------- admin ---------------- */
 
 function admin_login(array $in): void
@@ -925,10 +1007,16 @@ function admin_order_action(array $in): void
         return $users;
     }, []);
     if ($do === 'confirm') {
-        notify($uid, order_line($order, true), 'কনফার্ম · ' . $order['code'] . ' · ' . $order['number'] . ' · ৳' . fmt_money($amount) . ' কেটে নেওয়া হয়েছে।', 'order');
+        $title = order_line($order, true);
+        $body = 'কনফার্ম · ' . $order['code'] . ' · ' . $order['number'] . ' · ৳' . fmt_money($amount) . ' কেটে নেওয়া হয়েছে।';
+        notify($uid, $title, $body, 'order');
+        push_send_to('user', $uid, '✅ ' . $title, $body, 'order', './#history');
         log_event($a['id'], 'order_confirm', $order['code']);
     } else {
-        notify($uid, order_line($order, true), 'ক্যান্সেল · ' . $order['code'] . ' · ৳' . fmt_money($amount) . ' পেন্ডিং থেকে ছাড়া হয়েছে।', 'order');
+        $title = order_line($order, true);
+        $body = 'ক্যান্সেল · ' . $order['code'] . ' · ৳' . fmt_money($amount) . ' পেন্ডিং থেকে ছাড়া হয়েছে।';
+        notify($uid, $title, $body, 'order');
+        push_send_to('user', $uid, '❌ ' . $title, $body, 'order', './#history');
         log_event($a['id'], 'order_cancel', $order['code']);
     }
     json_out(['ok' => true, 'order' => $order]);

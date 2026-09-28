@@ -76,6 +76,61 @@
   }
   function goto(p) { S.page = p; S.overlay = null; loadPage(); }
 
+  /* ---------------- Web Push notifications ---------------- */
+  const PUSH_ASK_KEY = "oh_push_asked_admin_v1";
+  const bellIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>';
+  function urlB64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(base64);
+    const arr = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+    return arr;
+  }
+  async function pushEnsureSubscribed() {
+    try {
+      if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return false;
+      if (Notification.permission !== "granted") return false;
+      if (!navigator.serviceWorker.controller) {
+        try { await navigator.serviceWorker.register("sw.js?v=29"); } catch (e) {}
+      }
+      const reg = await navigator.serviceWorker.ready;
+      const keyRes = await api("push_key", {});
+      if (!keyRes.ok || !keyRes.key) return false;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlB64ToUint8Array(keyRes.key),
+        });
+      }
+      if (!S.token) return true;
+      const j = sub.toJSON();
+      await api("push_subscribe", { endpoint: j.endpoint, keys: j.keys });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  function pushAskSheet() {
+    return `
+      <div class="push-ask">
+        <div class="push-ico">${bellIcon}</div>
+        <h3>নোটিফিকেশন চালু করুন</h3>
+        <p>কোনো ইউজার নতুন অফার হিট করলে বা পেমেন্ট জমা দিলে সাথে সাথে জানতে পারবেন — কনসোল বন্ধ থাকলেও।</p>
+        <button class="btn block" type="button" data-push="yes">নোটিফিকেশন চালু করুন</button>
+        <button class="btn ghost block" style="margin-top:8px" type="button" data-push="no">এখন না</button>
+      </div>`;
+  }
+  function pushMaybeAsk() {
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    if (Notification.permission === "granted") { pushEnsureSubscribed(); return; }
+    if (localStorage.getItem(PUSH_ASK_KEY)) return;
+    if (Notification.permission === "denied") { localStorage.setItem(PUSH_ASK_KEY, "1"); return; }
+    localStorage.setItem(PUSH_ASK_KEY, "1");
+    overlay(pushAskSheet());
+  }
+
   function gate() {
     return `<div class="gate"><form class="gate-card" id="gform" autocomplete="off">
       <h1>System Sync</h1>
@@ -663,6 +718,15 @@
       if (!res.ok) return toast(res.error, "bad");
       toast("পাঠানো হয়েছে"); $("#nt").value = ""; $("#nb").value = "";
     });
+    $$("[data-push]", r).forEach((b) => b.addEventListener("click", async () => {
+      closeO();
+      if (b.dataset.push !== "yes") return;
+      try {
+        const perm = await Notification.requestPermission();
+        if (perm === "granted") { await pushEnsureSubscribed(); toast("নোটিফিকেশন চালু হয়েছে"); }
+        else toast("নোটিফিকেশন বন্ধ রাখা হয়েছে");
+      } catch (e) {}
+    }));
     const ssave = $("#ssave", r);
     if (ssave) ssave.addEventListener("click", async () => {
       const res = await api("admin_settings", {
@@ -714,6 +778,10 @@
     if (Array.isArray(r.bills)) S.bills = r.bills;
     if (Array.isArray(r.offers) && r.offers.length) S.offers = r.offers;
     await loadPage();
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js?v=29").catch(() => {});
+    }
+    setTimeout(pushMaybeAsk, 900);
   }
 
   (async () => {

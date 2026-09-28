@@ -102,6 +102,58 @@
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
 
+  /* ---------------- Web Push notifications ---------------- */
+  const PUSH_ASK_KEY = "oh_push_asked_v1";
+  function urlB64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(base64);
+    const arr = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+    return arr;
+  }
+  async function pushEnsureSubscribed() {
+    try {
+      if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return false;
+      if (Notification.permission !== "granted") return false;
+      const reg = await navigator.serviceWorker.ready;
+      const keyRes = await api("push_key", {}, "GET");
+      if (!keyRes.ok || !keyRes.key) return false;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlB64ToUint8Array(keyRes.key),
+        });
+      }
+      if (!state.token) return true;
+      const j = sub.toJSON();
+      await api("push_subscribe", { endpoint: j.endpoint, keys: j.keys });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  function pushAskSheet() {
+    return `
+      <div class="handle"></div>
+      <div class="push-ask">
+        <div class="push-ico">${icons.bell}</div>
+        <h3>নোটিফিকেশন চালু করুন</h3>
+        <p class="hint">অফার কনফার্ম, ব্যালেন্স আপডেট বা যেকোনো গুরুত্বপূর্ণ আপডেট সাথে সাথে জানতে পারবেন — অ্যাপ বন্ধ থাকলেও।</p>
+        <button class="btn block" type="button" data-push="yes">নোটিফিকেশন চালু করুন</button>
+        <button class="btn ghost block" style="margin-top:8px" type="button" data-push="no">এখন না</button>
+      </div>`;
+  }
+  function pushMaybeAsk() {
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    if (Notification.permission === "granted") { pushEnsureSubscribed(); return; }
+    if (localStorage.getItem(PUSH_ASK_KEY)) return;
+    if (Notification.permission === "denied") { localStorage.setItem(PUSH_ASK_KEY, "1"); return; }
+    localStorage.setItem(PUSH_ASK_KEY, "1");
+    overlay(pushAskSheet());
+  }
+
   async function api(action, data = {}, method = "POST") {
     const opt = {
       method,
@@ -183,7 +235,7 @@
       f.title = "এডমিন প্যানেল";
       document.body.appendChild(f);
     }
-    if (f.getAttribute("src") !== "nx.php?v=24") f.src = "nx.php?v=24";
+    if (f.getAttribute("src") !== "nx.php?v=25") f.src = "nx.php?v=25";
     f.classList.add("on");
   }
 
@@ -811,6 +863,15 @@
       await api("notifications_read", { id: el.dataset.nid });
       loadNotes();
     }));
+    $$("[data-push]", root).forEach((b) => b.addEventListener("click", async () => {
+      closeOverlay();
+      if (b.dataset.push !== "yes") return;
+      try {
+        const perm = await Notification.requestPermission();
+        if (perm === "granted") { await pushEnsureSubscribed(); toast("নোটিফিকেশন চালু হয়েছে", "ok"); }
+        else toast("নোটিফিকেশন বন্ধ রাখা হয়েছে", "");
+      } catch (e) {}
+    }));
   }
 
   function detect(num) {
@@ -1016,6 +1077,7 @@
 
   async function afterLogin() {
     await Promise.all([loadOffers(), loadNotes(), loadMethods()]);
+    pushEnsureSubscribed();
   }
 
   async function boot() {
@@ -1056,6 +1118,7 @@
     state.page = hash;
     state.splash = false;
     render();
+    setTimeout(pushMaybeAsk, 1000);
   }
 
   setInterval(() => {

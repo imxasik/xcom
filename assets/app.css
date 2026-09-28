@@ -466,6 +466,24 @@ body.nx-on { overflow: hidden; }
   font-size: 13px; font-weight: 600; box-shadow: 0 10px 30px rgba(0,0,0,.25);
   animation: pop .2s ease;
 }
+
+/* push permission ask sheet */
+.push-ask { text-align: center; padding: 6px 4px 2px; }
+.push-ask .push-ico {
+  width: 64px; height: 64px; margin: 6px auto 14px; border-radius: 20px;
+  background: linear-gradient(160deg, var(--pri) 0%, var(--pri-d) 100%);
+  color: #fff; display: grid; place-items: center;
+  box-shadow: 0 10px 26px rgba(15,118,110,.3);
+  position: relative;
+}
+.push-ico svg { width: 28px; height: 28px; }
+.push-ico::after {
+  content: ""; position: absolute; inset: -8px; border-radius: 26px;
+  border: 2px solid var(--pri-s); animation: pushring 1.8s ease-out infinite;
+}
+@keyframes pushring { 0% { transform: scale(.86); opacity: .9; } 100% { transform: scale(1.28); opacity: 0; } }
+.push-ask h3 { margin-bottom: 6px; }
+.push-ask .hint { margin: 0 0 18px; font-size: 13px; line-height: 1.55; }
 .toast.ok { background: #065f46; }
 .toast.bad { background: #9f1239; }
 @keyframes pop { from { transform: translateX(-50%) translateY(8px); opacity: 0; } }
