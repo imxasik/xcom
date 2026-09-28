@@ -3,6 +3,32 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/includes/bootstrap.php';
 
+/*
+ * Any uncaught error/exception in an API handler must still return clean JSON,
+ * otherwise the browser gets a raw PHP error page and the app shows garbled text
+ * (or "সার্ভার উত্তর পাওয়া যায়নি") for every action.
+ */
+set_exception_handler(static function ($e): void {
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store');
+    }
+    echo json_encode(['ok' => false, 'error' => 'সার্ভারে সমস্যা হয়েছে, একটু পরে চেষ্টা করুন'], JSON_UNESCAPED_UNICODE);
+    exit;
+});
+register_shutdown_function(static function (): void {
+    $err = error_get_last();
+    if ($err && in_array($err['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+        if (!headers_sent()) {
+            http_response_code(500);
+            header('Content-Type: application/json; charset=utf-8');
+            header('Cache-Control: no-store');
+        }
+        echo json_encode(['ok' => false, 'error' => 'সার্ভারে সমস্যা হয়েছে, একটু পরে চেষ্টা করুন'], JSON_UNESCAPED_UNICODE);
+    }
+});
+
 $input = body_json();
 if (!$input && $_POST) {
     $input = $_POST;

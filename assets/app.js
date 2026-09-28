@@ -112,27 +112,82 @@
     for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
     return arr;
   }
+  function pushSupported() {
+    return ("serviceWorker" in navigator) && ("PushManager" in window) && ("Notification" in window);
+  }
+  async function isBraveBrowser() {
+    try { return !!(navigator.brave && (await navigator.brave.isBrave())); } catch (e) { return false; }
+  }
+  // Returns { ok:true } on success, otherwise { ok:false, reason } where reason is one of
+  // unsupported | insecure | permission | nokey | subscribe.
   async function pushEnsureSubscribed() {
     try {
-      if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return false;
-      if (Notification.permission !== "granted") return false;
-      const reg = await navigator.serviceWorker.ready;
+      if (!pushSupported()) return { ok: false, reason: "unsupported" };
+      if (!window.isSecureContext) return { ok: false, reason: "insecure" };
+      if (Notification.permission !== "granted") return { ok: false, reason: "permission" };
+      let reg;
+      try { reg = await navigator.serviceWorker.ready; } catch (e) { reg = null; }
+      if (!reg) reg = await navigator.serviceWorker.register("sw.js?v=30").catch(() => null);
+      if (!reg || !reg.pushManager) return { ok: false, reason: "unsupported" };
       const keyRes = await api("push_key", {}, "GET");
-      if (!keyRes.ok || !keyRes.key) return false;
+      if (!keyRes.ok || !keyRes.key) return { ok: false, reason: "nokey" };
       let sub = await reg.pushManager.getSubscription();
       if (!sub) {
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlB64ToUint8Array(keyRes.key),
-        });
+        try {
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlB64ToUint8Array(keyRes.key),
+          });
+        } catch (e) {
+          // Chromium forks (Brave / plain Chromium / Mi Browser) ship without Google's
+          // FCM push endpoint enabled, so subscribe() rejects here even after permission
+          // was granted. Surface it instead of failing silently.
+          return { ok: false, reason: "subscribe" };
+        }
       }
-      if (!state.token) return true;
+      if (!sub) return { ok: false, reason: "subscribe" };
+      if (!state.token) return { ok: true };
       const j = sub.toJSON();
-      await api("push_subscribe", { endpoint: j.endpoint, keys: j.keys });
-      return true;
+      const r = await api("push_subscribe", { endpoint: j.endpoint, keys: j.keys });
+      if (!r || !r.ok) return { ok: false, reason: "subscribe" };
+      return { ok: true };
     } catch (e) {
-      return false;
+      return { ok: false, reason: "subscribe" };
     }
+  }
+  async function pushFailMessage(reason) {
+    if (reason === "insecure") return "নোটিফিকেশনের জন্য HTTPS (সিকিউর) সংযোগ দরকার।";
+    if (reason === "unsupported") return "এই ব্রাউজারে পুশ নোটিফিকেশন সাপোর্ট করে না। Chrome ব্যবহার করে দেখুন।";
+    if (reason === "permission") return "নোটিফিকেশন অনুমতি দেওয়া হয়নি। ব্রাউজার সেটিংস থেকে অনুমতি দিন।";
+    if (reason === "nokey") return "সার্ভারে পুশ কনফিগার করা হয়নি। পরে চেষ্টা করুন।";
+    if (reason === "subscribe") {
+      if (await isBraveBrowser()) {
+        return "Brave-তে পুশ চালু করতে: Settings → Privacy and security → 'Use Google services for push messaging' অন করে ব্রাউজার রিস্টার্ট করুন, তারপর আবার চেষ্টা করুন।";
+      }
+      return "ব্রাউজারে Google পুশ সার্ভিস নিষ্ক্রিয় থাকায় নোটিফিকেশন চালু করা যায়নি। ব্রাউজার সেটিংস থেকে পুশ/Google সার্ভিস চালু করুন অথবা Chrome ব্যবহার করুন।";
+    }
+    return "নোটিফিকেশন চালু করা যায়নি।";
+  }
+  // Central "turn on notifications" flow reused by the intro sheet and the account toggle.
+  async function pushEnable() {
+    if (!pushSupported()) { toast(await pushFailMessage("unsupported"), "bad"); return false; }
+    if (!window.isSecureContext) { toast(await pushFailMessage("insecure"), "bad"); return false; }
+    let perm = Notification.permission;
+    if (perm === "default") {
+      try {
+        // Some engines still use the legacy callback form; support both.
+        perm = await new Promise((resolve) => {
+          const p = Notification.requestPermission(resolve);
+          if (p && typeof p.then === "function") p.then(resolve);
+        });
+      } catch (e) { perm = Notification.permission; }
+    }
+    localStorage.setItem(PUSH_ASK_KEY, "1");
+    if (perm !== "granted") { toast(await pushFailMessage("permission"), ""); return false; }
+    const res = await pushEnsureSubscribed();
+    if (res.ok) { toast("নোটিফিকেশন চালু হয়েছে", "ok"); return true; }
+    toast(await pushFailMessage(res.reason), "bad");
+    return false;
   }
   function pushAskSheet() {
     return `
@@ -146,11 +201,10 @@
       </div>`;
   }
   function pushMaybeAsk() {
-    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    if (!pushSupported()) return;
     if (Notification.permission === "granted") { pushEnsureSubscribed(); return; }
-    if (localStorage.getItem(PUSH_ASK_KEY)) return;
     if (Notification.permission === "denied") { localStorage.setItem(PUSH_ASK_KEY, "1"); return; }
-    localStorage.setItem(PUSH_ASK_KEY, "1");
+    if (localStorage.getItem(PUSH_ASK_KEY)) return;
     overlay(pushAskSheet());
   }
 
@@ -169,13 +223,15 @@
     }
     let j = {};
     try { j = JSON.parse(await res.text()); } catch (e) { j = { ok: false, error: "সার্ভার উত্তর পাওয়া যায়নি" }; }
-    if (res.status === 401 && state.token && action !== "login") {
+    if (res.status === 401 && state.token && action !== "login" && action !== "push_subscribe") {
       state.token = "";
       state.isAdmin = false;
       localStorage.removeItem("oh_token");
       localStorage.removeItem("oh_at");
       state.user = null;
+      closeOverlay();
       render();
+      toast("সেশন শেষ হয়েছে, আবার লগইন করুন", "bad");
     }
     return j;
   }
@@ -186,7 +242,8 @@
     el.className = "toast " + kind;
     el.textContent = msg;
     document.body.appendChild(el);
-    setTimeout(() => el.remove(), 2800);
+    const ms = Math.min(9000, Math.max(2800, String(msg).length * 80));
+    setTimeout(() => el.remove(), ms);
   }
 
   function copy(text) {
@@ -588,6 +645,33 @@
     </main>`;
   }
 
+  function pushCard() {
+    const supported = ("Notification" in window) && ("serviceWorker" in navigator) && ("PushManager" in window);
+    let status, action = "";
+    if (!supported) {
+      status = "<span style='color:var(--bad)'>এই ব্রাউজারে সাপোর্ট নেই</span>";
+    } else if (Notification.permission === "granted") {
+      status = "<span style='color:#047857'>চালু আছে</span>";
+      action = `<button class="btn ghost block" style="margin-top:10px" data-push="yes" type="button">আবার সিঙ্ক করুন</button>`;
+    } else if (Notification.permission === "denied") {
+      status = "<span style='color:var(--bad)'>ব্লক করা আছে</span>";
+      action = `<p class="hint" style="margin-top:8px">ব্রাউজারের অ্যাড্রেস বারের পাশে থাকা 🔒/সাইট সেটিংস থেকে নোটিফিকেশন 'Allow' করুন।</p>`;
+    } else {
+      status = "<span style='color:var(--muted)'>বন্ধ</span>";
+      action = `<button class="btn block" style="margin-top:10px" data-push="yes" type="button">নোটিফিকেশন চালু করুন</button>`;
+    }
+    return `<div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="display:inline-flex;width:22px;height:22px;color:var(--brand)">${icons.bell}</span>
+          <b>পুশ নোটিফিকেশন</b>
+        </div>
+        <span style="font-size:13px">${status}</span>
+      </div>
+      ${action}
+    </div>`;
+  }
+
   function pageAccount() {
     const u = state.user;
     const b = balView(u);
@@ -604,6 +688,7 @@
         <div class="field"><label>নাম</label><input id="pname" value="${esc(u.name)}" /></div>
         <button class="btn block" id="psave">নাম সেভ</button>
       </div>
+      ${pushCard()}
       <div class="card">
         <div class="field"><label>বর্তমান পাসওয়ার্ড</label><input id="pold" type="password" /></div>
         <div class="field"><label>নতুন পাসওয়ার্ড</label><input id="pnew" type="password" /></div>
@@ -864,13 +949,20 @@
       loadNotes();
     }));
     $$("[data-push]", root).forEach((b) => b.addEventListener("click", async () => {
-      closeOverlay();
-      if (b.dataset.push !== "yes") return;
-      try {
-        const perm = await Notification.requestPermission();
-        if (perm === "granted") { await pushEnsureSubscribed(); toast("নোটিফিকেশন চালু হয়েছে", "ok"); }
-        else toast("নোটিফিকেশন বন্ধ রাখা হয়েছে", "");
-      } catch (e) {}
+      if (b.dataset.push !== "yes") {
+        localStorage.setItem(PUSH_ASK_KEY, "1");
+        closeOverlay();
+        return;
+      }
+      // Close the intro sheet (if any) but keep the account toggle in place.
+      if ($(".overlay")) closeOverlay();
+      b.disabled = true;
+      const prev = b.textContent;
+      b.textContent = "চালু হচ্ছে…";
+      await pushEnable();
+      b.disabled = false;
+      b.textContent = prev;
+      if (state.page === "account") render();
     }));
   }
 
@@ -1151,10 +1243,12 @@
   }, 5000);
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.getRegistrations().then((rs) => {
-      Promise.all(rs.map((r) => r.unregister())).then(() => {
-        navigator.serviceWorker.register("sw.js?v=29").catch(() => {});
-      });
+    // Register (or refresh) the service worker WITHOUT unregistering first.
+    // Unregistering drops the existing Web Push subscription, which previously
+    // wiped notifications on every reload; sw.js already self-updates via
+    // skipWaiting()/clients.claim() and the versioned ?v= query.
+    navigator.serviceWorker.register("sw.js?v=30").then((reg) => {
+      try { reg.update(); } catch (e) {}
     }).catch(() => {});
   }
 
